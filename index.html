@@ -930,8 +930,8 @@ var MISSIONS=MISSIONS_A.concat(MISSIONS_B,MISSIONS_C,MISSIONS_D,MISSIONS_E);
 var ENCORE_FLAT=[]; for(var _en=1;_en<=5;_en++){ (ENCORES[_en]||[]).forEach(function(e){ ENCORE_FLAT.push(e); }); }
 var STEP_NAMES=["Hear the Pro","Power Words","Diction Drill","Build My Speech","Practice","Perform & Record","Leader Checklist"];
 /* ================= STATE ================= */
-function defState(){ return { baselineDone:false, baselineDate:"", baselineNoAudio:false,
-  missions:{}, stars:0, speechCount:0, build:{}, starred:[], gym:{},
+function defState(){ return { baselineDone:false, baselineDate:"", baselineNoAudio:false, baselineLive:false,
+  missions:{}, stars:0, speechCount:0, build:{}, starred:[], gym:{}, progress:null,
   performedDates:{}, nextReward:"A family treat she chooses — set by Amma & Nanna 🎁",
   applause:"", applauseFor:"", applauseSeen:true,
   shows:{}, encores:{}, family:[], mysteryOpen:{}, seq:0 }; }
@@ -1168,7 +1168,7 @@ function renderHome(){
   else { var nm=nextMission();
     if(nm){ SPOT={type:"mission",ix:MISSIONS.indexOf(nm)}; st.textContent="Tonight's Star: Sreshta";
       sp.textContent = (nm.mystery && !S.mysteryOpen[nm.id]) ? "🕵️ Next: a Mystery Mission — open to reveal!" : "🎤 Next Mission: "+nm.title;
-      sh.textContent="Tap to start your mission!"; }
+      sh.textContent = (S.progress && S.progress.kind==="mission" && S.progress.id===nm.id) ? "Tap to continue — Leo saved your place! 💛" : "Tap to start your mission!"; }
     else if(showDone(5)){ SPOT={type:"family"}; st.textContent="👑 YOUNG LEADER!"; sp.textContent="All 50 speeches complete — the stage is everywhere now!"; sh.textContent="Tap for a Family Stage performance, champion!"; }
     else { SPOT={type:"family"}; st.textContent="🌟 Shine On, Sreshta!"; sp.textContent="Enjoy the Voice Gym or a Family Stage today!"; sh.textContent="Tap to perform for your family"; } }
   /* stage lights */
@@ -1203,9 +1203,13 @@ function renderHome(){
     var isMyst = m.mystery && !S.mysteryOpen[m.id] && !missionDone(m.id);
     var label = isMyst ? "🕵️ Mission "+m.num+": Mystery Mission — open to reveal!" : "🎤 Mission "+m.num+": "+esc(m.title);
     if(missionDone(m.id)) missRow("<span>"+label.replace("🕵️","🎤")+"</span><span>⭐ Done</span>","done", function(){ startMission(ix); });
-    else if(missionUnlocked(ix)) missRow("<span>"+label+"</span><span>▶️ Play</span>","open", function(){
+    else if(missionUnlocked(ix)){ var prog=S.progress;
+      var inProg = !!(prog && prog.kind==="mission" && prog.id===m.id);
+      var rowLabel = inProg ? label+"<br><span style=\"font-weight:700;font-size:13px;\">Leo saved your place — right where you left it! 💛</span>" : label;
+      var rowCta = inProg ? "▶️ Continue<br><span style=\"font-size:12px;\">Step "+((prog.step||0)+1)+" of 7</span>" : "▶️ Play";
+      missRow("<span>"+rowLabel+"</span><span style=\"text-align:right;\">"+rowCta+"</span>","open", function(){
       if(isMyst){ S.mysteryOpen[m.id]=true; save(); alert("🕵️ Mystery revealed!\n\nMission "+m.num+": "+m.title+"\n\nLeo knew you would love this one! 🦁"); }
-      startMission(ix); });
+      startMission(ix); }); }
     else missRow("<span>"+label+"</span><span>🔒</span>","", function(){
       if(isMyst) alert("🕵️ A Mystery Mission is hiding here!\nFinish the mission before it to reveal its topic!"); });
   });
@@ -1226,16 +1230,27 @@ function renderHome(){
 
 function esc(t){ return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 /* ================= BASELINE ================= */
-var baseRec=null;
+var baseRec=null, baseVaultFor=null;
 function openBaseline(){ show("scr-baseline");
   var ui=document.getElementById("baseRecUI"); ui.innerHTML="";
-  baseRec=makeRecorder(ui,{allowSkip:true, onChange:function(){ document.getElementById("baseDoneBtn").disabled=!baseRec.hasTake(); }});
+  baseRec=makeRecorder(ui,{allowSkip:true, onChange:function(){ document.getElementById("baseDoneBtn").disabled=!baseRec.hasTake();
+    /* vault the Day 1 take the moment recording stops, so leaving this
+       screen mid-baseline can no longer lose it */
+    if(baseRec.blob && baseVaultFor!==baseRec.blob){ baseVaultFor=baseRec.blob; IDB.put("baseline", baseRec.blob, function(){}); }
+    if(!S.baselineDone){ var lv=!!baseRec.liveDone;
+      if(lv!==!!S.baselineLive){ S.baselineLive=lv; save(); } } }});
   var pl=document.getElementById("basePlay"); pl.innerHTML="";
   if(S.baselineDone){ var a=document.createElement("audio"); a.controls=true; pl.appendChild(a); playRecInto(a,"baseline"); }
-  document.getElementById("baseDoneBtn").disabled = S.baselineDone ? false : true;
+  else { /* restore whatever she already did here in an earlier visit */
+    if(S.baselineLive){ baseRec.liveDone=true; var lvb=ui.querySelector('[data-act="live"]'); if(lvb) lvb.checked=true; }
+    IDB.get("baseline", function(b){ if(!b || S.baselineDone || !baseRec) return;
+      baseRec.blob=b; baseVaultFor=b; baseRec.ui();
+      document.getElementById("baseDoneBtn").disabled=false; });
+  }
+  document.getElementById("baseDoneBtn").disabled = S.baselineDone ? false : !S.baselineLive;
 }
 function saveBaseline(){ if(S.baselineDone && !baseRec.blob && !baseRec.liveDone){ goHome(); return; }
-  function finish(){ S.baselineDone=true; S.baselineDate=todayKey(); if(baseRec.liveDone && !baseRec.blob) S.baselineNoAudio=true;
+  function finish(){ S.baselineDone=true; S.baselineLive=false; S.baselineDate=todayKey(); if(baseRec.liveDone && !baseRec.blob) S.baselineNoAudio=true;
     addRec("baseline","baseline","","Day 1 — My First Recording"); save(); celebrate(); goHome(); }
   if(baseRec.blob){ IDB.put("baseline", baseRec.blob, function(){ finish(); }); }
   else finish();
@@ -1252,10 +1267,24 @@ function openGym(){ show("scr-gym");
   var ui=document.getElementById("gymRecUI"); ui.innerHTML="";
   gymRec=makeRecorder(ui,{allowSkip:false,onChange:function(){}}); }
 /* ================= MISSION FLOW ================= */
-var CUR={ ix:0, step:0, rec:null, practice:false, check:{}, homeTick:false, performed:false, kind:"mission", obj:null, stage:0 };
-function startMission(ix){ CUR.ix=ix; CUR.step=0; CUR.rec=null; CUR.practice=false; CUR.check={}; CUR.homeTick=false; CUR.performed=false; CUR.kind="mission"; CUR.obj=null;
+var CUR={ ix:0, step:0, rec:null, practice:false, check:{}, homeTick:false, performed:false, vaulted:false, vaultedFor:null, kind:"mission", obj:null, stage:0 };
+/* Auto-save: the in-progress mission/encore run lives in S.progress (inside
+   shines_state) so an accidental exit never loses her place or her work. */
+function saveCur(){ var m=curMission(); if(!m) return;
+  S.progress={ kind:CUR.kind, id:m.id, ix:CUR.ix, stage:CUR.stage, step:CUR.step,
+    practice:!!CUR.practice, performed:!!CUR.performed, vaulted:!!CUR.vaulted,
+    check:CUR.check||{}, homeTick:!!CUR.homeTick };
+  save(); }
+function clearCurProgress(){ if(S.progress){ S.progress=null; save(); } }
+function restoreCur(kind, id){ var p=S.progress; if(!p || p.kind!==kind || p.id!==id) return false;
+  if(kind==="encore" && p.stage!==CUR.stage) return false;
+  CUR.step=p.step||0; CUR.practice=!!p.practice; CUR.performed=!!p.performed; CUR.vaulted=!!p.vaulted;
+  CUR.check=p.check||{}; CUR.homeTick=!!p.homeTick; return true; }
+function startMission(ix){ CUR.ix=ix; CUR.step=0; CUR.rec=null; CUR.practice=false; CUR.check={}; CUR.homeTick=false; CUR.performed=false; CUR.vaulted=false; CUR.vaultedFor=null; CUR.kind="mission"; CUR.obj=null;
+  if(!missionDone(MISSIONS[ix].id)) restoreCur("mission", MISSIONS[ix].id);
   show("scr-mission"); renderStep(); }
-function startEncore(n, i){ var e=ENCORES[n][i]; CUR.kind="encore"; CUR.obj=e; CUR.stage=n; CUR.step=0; CUR.rec=null; CUR.practice=false; CUR.check={}; CUR.homeTick=false; CUR.performed=false;
+function startEncore(n, i){ var e=ENCORES[n][i]; CUR.kind="encore"; CUR.obj=e; CUR.stage=n; CUR.step=0; CUR.rec=null; CUR.practice=false; CUR.check={}; CUR.homeTick=false; CUR.performed=false; CUR.vaulted=false; CUR.vaultedFor=null;
+  restoreCur("encore", e.id);
   show("scr-mission"); renderStep(); }
 function curMission(){ return CUR.kind==="encore" ? CUR.obj : MISSIONS[CUR.ix]; }
 function renderDots(){ var d=document.getElementById("stepDots"); d.innerHTML="";
@@ -1390,7 +1419,8 @@ function renderStep(){ var m=curMission(); document.getElementById("missHead").t
       +'<div class="center"><button class="btn plum" id="pracBtn">🎤 I Practised Once!</button></div>';
     foot('<button class="btn" id="nextBtn" disabled>To the Stage! ➡️</button>');
     paintLeo();
-    document.getElementById("pracBtn").addEventListener("click", function(){ CUR.practice=true; document.getElementById("nextBtn").disabled=false; this.disabled=true; this.textContent="Bravo! 🌟"; });
+    document.getElementById("pracBtn").addEventListener("click", function(){ CUR.practice=true; saveCur(); document.getElementById("nextBtn").disabled=false; this.disabled=true; this.textContent="Bravo! 🌟"; });
+    if(CUR.practice){ var pb0=document.getElementById("pracBtn"); pb0.disabled=true; pb0.textContent="Bravo! 🌟"; document.getElementById("nextBtn").disabled=false; }
   }
   else if(st===5){ /* Perform & Record */
     B.innerHTML='<h3 class="baloo" style="color:var(--plum);margin-top:2px;">6️⃣ Perform & Record 🌟</h3>'
@@ -1400,7 +1430,18 @@ function renderStep(){ var m=curMission(); document.getElementById("missHead").t
       +'<p class="mut center">Retake as many times as you like — leaders polish until they sparkle!</p>';
     foot('<button class="btn" id="nextBtn" disabled>My Performance Is Saved! ➡️</button>');
     var ui=document.getElementById("perfRec"); ui.innerHTML="";
-    CUR.rec=makeRecorder(ui,{allowSkip:true, onChange:function(c){ CUR.performed=c.hasTake(); document.getElementById("nextBtn").disabled=!CUR.performed; }});
+    CUR.rec=makeRecorder(ui,{allowSkip:true, onChange:function(c){ CUR.performed=c.hasTake(); document.getElementById("nextBtn").disabled=!CUR.performed;
+      if(c.blob && CUR.vaultedFor!==c.blob){ vaultPerformance(); }
+      saveCur(); }});
+    if(CUR.performed) document.getElementById("nextBtn").disabled=false;
+    if(CUR.performed || CUR.vaulted){ /* bring back the take saved before an accidental exit */
+      IDB.get("rec_"+m.id, function(b){ if(CUR.step!==5 || !CUR.rec || curMission().id!==m.id) return;
+        if(b){ CUR.rec.blob=b; CUR.vaulted=true; CUR.performed=true; CUR.rec.ui();
+          var nb5=document.getElementById("nextBtn"); if(nb5) nb5.disabled=false; }
+        else if(CUR.performed && !CUR.rec.blob){ var lv5=ui.querySelector('[data-act="live"]');
+          if(lv5){ lv5.checked=true; CUR.rec.liveDone=true; }
+          var nb6=document.getElementById("nextBtn"); if(nb6) nb6.disabled=false; } });
+    }
   }
   else if(st===6){ /* Checklist & Celebration */
     var h='<h3 class="baloo" style="color:var(--plum);margin-top:2px;">7️⃣ Leader Checklist — for Amma ✅</h3>'
@@ -1413,9 +1454,14 @@ function renderStep(){ var m=curMission(); document.getElementById("missHead").t
     foot('<button class="btn" id="finishBtn" disabled>🎉 Finish Mission!</button>');
     B.querySelectorAll(".rate").forEach(function(row){ row.querySelectorAll("button").forEach(function(b){
       b.addEventListener("click", function(){ row.querySelectorAll("button").forEach(function(x){x.classList.remove("sel");});
-        b.classList.add("sel"); CUR.check[row.getAttribute("data-dim")]=b.getAttribute("data-r"); checkFinishReady(); }); }); });
-    document.getElementById("homeTick").addEventListener("change", function(e){ CUR.homeTick=e.target.checked; });
+        b.classList.add("sel"); CUR.check[row.getAttribute("data-dim")]=b.getAttribute("data-r"); saveCur(); checkFinishReady(); }); }); });
+    document.getElementById("homeTick").addEventListener("change", function(e){ CUR.homeTick=e.target.checked; saveCur(); });
     document.getElementById("finishBtn").addEventListener("click", finishMission);
+    /* restore Amma's ratings + home tick saved before an accidental exit */
+    B.querySelectorAll(".rate").forEach(function(row){ var v=CUR.check[row.getAttribute("data-dim")]; if(!v) return;
+      row.querySelectorAll("button").forEach(function(x){ if(x.getAttribute("data-r")===v) x.classList.add("sel"); }); });
+    var ht6=document.getElementById("homeTick"); if(ht6) ht6.checked=!!CUR.homeTick;
+    checkFinishReady();
   }
   var nb=document.getElementById("nextBtn");
   if(nb && st!==6){ nb.addEventListener("click", function(){
@@ -1423,22 +1469,32 @@ function renderStep(){ var m=curMission(); document.getElementById("missHead").t
       if(mstage>=3){ var bt=buildTextOf(mm.id); var used=mm.power.filter(function(pw){ return bt.indexOf(pw.word.toLowerCase())>=0; }).length;
         if(used<2){ var wEl=document.getElementById("buildWarn"); if(wEl){ wEl.style.display="block";
           wEl.textContent="🌟 Leader rule (Stage "+mstage+"): weave at least 2 of today's Power Words into ANY of your points — you have "+used+" so far. Leo believes in you! 🦁"; } return; } } }
-    if(CUR.step===5){ savePerformance(function(){ CUR.step++; renderStep(); }); }
-    else { CUR.step++; renderStep(); } }); }
+    if(CUR.step===5){ if(perfNeedsVault()){ vaultPerformance(function(){ CUR.step++; saveCur(); renderStep(); }); }
+      else { CUR.step++; saveCur(); renderStep(); } }
+    else { CUR.step++; saveCur(); renderStep(); } }); }
 }
 function checkFinishReady(){ var ok=DIMS.every(function(d){ return CUR.check[d]; });
   document.getElementById("finishBtn").disabled=!ok; }
-function savePerformance(cb){ var m=curMission(); var rid="rec_"+m.id;
-  function done(){ if(CUR.kind==="encore") addRec(rid,"encore",m.id,"🎭 Encore Practice — "+m.title); else addRec(rid,"mission",m.id,"Mission "+m.num+": "+m.title); cb(); }
+function perfNeedsVault(){ if(!CUR.performed) return false;
+  if(CUR.rec && CUR.rec.blob) return CUR.vaultedFor!==CUR.rec.blob;
+  return !CUR.vaulted; }
+/* The performance is vaulted + registered the moment recording stops, so
+   leaving the Perform step can never lose her take. addRec de-dupes by id
+   and IDB.put overwrites the same key, so re-recording replaces it cleanly. */
+function vaultPerformance(cb){ var m=curMission(); var rid="rec_"+m.id;
+  function done(){ CUR.vaulted=true; if(CUR.rec && CUR.rec.blob) CUR.vaultedFor=CUR.rec.blob; saveCur();
+    if(CUR.kind==="encore") addRec(rid,"encore",m.id,"🎭 Encore Practice — "+m.title); else addRec(rid,"mission",m.id,"Mission "+m.num+": "+m.title);
+    if(cb) cb(); }
   if(CUR.rec && CUR.rec.blob){ IDB.put(rid, CUR.rec.blob, function(){ done(); }); } else done();
 }
+function savePerformance(cb){ vaultPerformance(cb); }
 function finishMission(){ var m=curMission();
   if(CUR.kind==="encore"){ finishEncore(m); return; }
-  if(missionDone(m.id)){ goHome(); return; }
+  if(missionDone(m.id)){ clearCurProgress(); goHome(); return; }
   S.missions[m.id]={ done:true, date:todayKey(), checklist:CUR.check, homeDone:!!CUR.homeTick, seq:++S.seq };
   S.stars+=10; S.speechCount+=1; S.performedDates[todayKey()]=true;
   if(S.applause){ S.applauseSeen=false; S.applauseFor=m.id; }
-  save(); celebrate();
+  save(); clearCurProgress(); celebrate();
   var B=document.getElementById("stepBody");
   B.innerHTML='<div class="center"><div class="leo-slot"></div>'
     +'<h2 class="baloo" style="color:var(--plum);">👏👏 BRAVO, SRESHTA! 👏👏</h2>'
@@ -1456,7 +1512,7 @@ function finishEncore(m){ var n=CUR.stage;
   S.encores[n].push({ id:m.id, date:todayKey(), checklist:CUR.check, homeDone:!!CUR.homeTick, seq:++S.seq });
   S.stars+=10; S.performedDates[todayKey()]=true;
   if(S.applause){ S.applauseSeen=false; }
-  save(); celebrate();
+  save(); clearCurProgress(); celebrate();
   var B=document.getElementById("stepBody");
   B.innerHTML='<div class="center"><div class="leo-slot"></div>'
     +'<h2 class="baloo" style="color:var(--plum);">👏👏 BRAVO, CHAMPION! 👏👏</h2>'
